@@ -1,53 +1,57 @@
-# Use the official Ubuntu 20.04 as the base image
-FROM --platform=linux/amd64 ubuntu:20.04
+# The platform is pinned to amd64 on purpose: ITC ships PosAPI.deb as amd64 only,
+# so building on an arm64 host (e.g. Apple Silicon) would otherwise produce an
+# image whose PosService cannot start.
 
-# Set environment variables to make apt non-interactive
+# Stage 1: unpack the vendor package. Nothing from this stage ships except the
+# files copied out of /out below, so the zips and unpacking tools stay out of
+# the final image.
+FROM --platform=linux/amd64 ubuntu:24.04 AS unpack
+
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install required packages
-RUN apt-get update && apt-get install -y \
-    curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     binutils \
-    tar \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Create required directories
-RUN mkdir -p /opt/posapi /etc/posapi /var/log/ebarimt
-
-# Set the working directory
 WORKDIR /tmp
 
 # Build argument to switch between production and non-production versions
 ARG PROD=false
 
-# Copy the PosAPI package to the container
-COPY . .
+COPY *.zip ./
 
-# Download and install PosAPI
 RUN if [ "$PROD" = "true" ]; then \
         FILE="PosService_3.0.12-Prod.zip"; \
     else \
         FILE="ST_PosService_3.0.12-Staging.zip"; \
     fi && \
-    unzip $FILE && \
-    ar --output ./Package/linux/ -vx ./Package/linux/PosAPI.deb && \
+    unzip -q $FILE && \
+    ar --output ./Package/linux/ -x ./Package/linux/PosAPI.deb && \
     tar -xf ./Package/linux/data.tar.xz -C ./Package/linux/ && \
+    mkdir -p /out/usr/lib /out/opt/posapi /out/etc/posapi && \
     chmod 644 ./Package/linux/usr/lib/* && \
-    cp -f ./Package/linux/usr/lib/* /usr/lib/ && \
-    cp -f ./Package/linux/opt/posapi/PosService /opt/posapi/PosService && \
-    cp -f ./Package/linux/etc/posapi/posapi.ini /etc/posapi/posapi.ini && \
-    rm -rf ./Package
+    cp -a ./Package/linux/usr/lib/. /out/usr/lib/ && \
+    cp -a ./Package/linux/opt/posapi/PosService /out/opt/posapi/PosService && \
+    cp -a ./Package/linux/etc/posapi/posapi.ini /out/etc/posapi/posapi.ini
 
-# Set permissions
-RUN touch /var/log/ebarimt/posapi.log
+# Stage 2: the runtime image.
+FROM --platform=linux/amd64 ubuntu:24.04
 
-# Expose the port used by PosAPI (adjust if necessary)
+ENV DEBIAN_FRONTEND=noninteractive
+
+# PosService downloads PosAPI over HTTPS on start, so it needs the CA bundle.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=unpack /out/ /
+
+RUN mkdir -p /var/log/ebarimt && touch /var/log/ebarimt/posapi.log
+
 EXPOSE 7080
 
-# Set the working directory to where PosService is located
 WORKDIR /opt/posapi
 
-# Run the PosService when the container starts
 CMD ["./PosService"]
