@@ -30,10 +30,10 @@ RUN if [ "$PROD" = "true" ]; then \
     unzip -q $FILE && \
     ar --output ./Package/linux/ -x ./Package/linux/PosAPI.deb && \
     tar -xf ./Package/linux/data.tar.xz -C ./Package/linux/ && \
-    mkdir -p /out/usr/lib /out/opt/posapi /out/etc/posapi && \
+    mkdir -p /out/usr/lib /out/usr/local/lib/posapi /out/etc/posapi && \
     chmod 644 ./Package/linux/usr/lib/* && \
     cp -a ./Package/linux/usr/lib/. /out/usr/lib/ && \
-    cp -a ./Package/linux/opt/posapi/PosService /out/opt/posapi/PosService && \
+    cp -a ./Package/linux/opt/posapi/PosService /out/usr/local/lib/posapi/PosService && \
     cp -a ./Package/linux/etc/posapi/posapi.ini /out/etc/posapi/posapi.ini
 
 # Stage 2: the runtime image.
@@ -48,7 +48,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=unpack /out/ /
 
-RUN mkdir -p /var/log/ebarimt && touch /var/log/ebarimt/posapi.log
+RUN mkdir -p /opt/posapi /var/log/ebarimt && touch /var/log/ebarimt/posapi.log
+
+# /opt/posapi is state (the downloaded PosAPI, vatps.db, the registration) and
+# is meant to be a volume. A volume mounted there would hide anything the image
+# ships at that path, so the launcher lives in /usr/local/lib/posapi and the
+# entrypoint copies it in on every start. Copying every time, not only when
+# missing, means a newer image also brings its newer launcher.
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+VOLUME /opt/posapi
 
 EXPOSE 7080
 
@@ -61,4 +70,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
 
 WORKDIR /opt/posapi
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["./PosService"]

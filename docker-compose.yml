@@ -1,0 +1,31 @@
+# PosAPI with its state on a named volume, so the POS registration survives
+# container restarts, recreation and image upgrades.
+#
+#   docker compose up -d                       # staging (default)
+#   EBARIMT_ENV=prod docker compose up -d      # production
+#
+# The volume name carries the environment on purpose: a registration made
+# against staging must never be picked up by a prod container, or the other
+# way round.
+
+services:
+  posapi:
+    image: ghcr.io/orshih6/ebarimtv3:3.0.12-${EBARIMT_ENV:-staging}
+    platform: linux/amd64
+    container_name: ebarimtv3-${EBARIMT_ENV:-staging}
+    restart: unless-stopped
+    # Localhost only: PosAPI has no authentication, and anything that can reach
+    # 7080 can issue receipts under your registration.
+    ports:
+      - "127.0.0.1:7080:7080"
+    volumes:
+      - posapi:/opt/posapi
+      - logs:/var/log/ebarimt
+      # To use your own config instead of the one in the image:
+      # - ./posapi.ini:/etc/posapi/posapi.ini:ro
+
+volumes:
+  posapi:
+    name: ebarimtv3-${EBARIMT_ENV:-staging}-data
+  logs:
+    name: ebarimtv3-${EBARIMT_ENV:-staging}-logs

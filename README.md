@@ -28,18 +28,40 @@ docker build --build-arg PROD=true -t ebarimtv3:prod .
 
 ## Run
 
+The simplest way is Docker Compose with the included
+[`docker-compose.yml`](docker-compose.yml), which keeps PosAPI's state on a named
+volume so the POS registration survives restarts, recreation and image upgrades:
+
 ```bash
-docker run -d --name posapi -p 127.0.0.1:7080:7080 ebarimtv3:st
+docker compose up -d                       # staging (default)
+EBARIMT_ENV=prod docker compose up -d      # production
+```
+
+Staging and prod get separate volumes (`ebarimtv3-staging-data`,
+`ebarimtv3-prod-data`), so a registration made against one environment is never
+picked up by the other.
+
+Or with plain `docker run`:
+
+```bash
+docker run -d --name posapi -p 127.0.0.1:7080:7080 \
+  -v posapi-staging:/opt/posapi \
+  ghcr.io/orshih6/ebarimtv3:3.0.12-staging
 ```
 
 PosAPI then listens on `http://localhost:7080`. The `127.0.0.1:` prefix matters:
 a plain `-p 7080:7080` publishes the port on every interface of the host, and
 PosAPI has no authentication (see below).
 
+- Data: `/opt/posapi` — the downloaded PosAPI, `vatps.db` and the registration.
+  Mount a named volume or a host directory there. Without one, Docker creates an
+  anonymous volume that is easy to lose when the container is removed.
 - Config: `/etc/posapi/posapi.ini`. To override it, mount your own file:
   `-v $(pwd)/posapi.ini:/etc/posapi/posapi.ini:ro`
 - Logs: `/var/log/ebarimt/posapi.log`
-- Data: `/opt/posapi` — see below. It is lost when the container is removed.
+- Health: the image has a `HEALTHCHECK` on port 7080. `docker ps` shows
+  `unhealthy` when PosAPI has stopped even though the container is still running.
+  Docker does not restart an unhealthy container by itself.
 
 ## What the image actually runs
 
@@ -56,12 +78,13 @@ What follows from that:
   launcher version; the server it downloads is whatever ITC currently serves.
 - **The container needs outbound HTTPS** to `*.ebarimt.mn` and `*.auth.itc.gov.mn`
   to start on an empty `/opt/posapi`.
-- **`/opt/posapi` is state, not code.** To keep the registration, persist that
-  directory. Mounting a volume over it hides the launcher the image ships there,
-  so copy `PosService` onto the volume first (e.g. from an init container).
+- **`/opt/posapi` is state, not code.** Persist that directory to keep the
+  registration. The image keeps its launcher in `/usr/local/lib/posapi` and copies
+  it into `/opt/posapi` on every start, so any volume or host directory can be
+  mounted there, including an empty one.
 - **Run one container per registration**, never two against the same database.
 - **A running container is not proof of a healthy service** — the launcher keeps
-  running even if PosAPI does not.
+  running, and does not restart PosAPI, if PosAPI dies. Watch the health status.
 - **PosAPI has no authentication.** Anything that can reach port 7080 can issue
   receipts under your registration. Never publish it to the internet; keep it on
   localhost or a private network that only your POS can reach.
