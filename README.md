@@ -80,6 +80,10 @@ Every push to `main` builds **both** variants and pushes them to
 docker pull ghcr.io/orshih6/ebarimtv3:3.0.12-prod
 ```
 
+The images are **linux/amd64 only**, because ITC ships PosAPI for amd64 only. On an
+arm64 host (e.g. Apple Silicon) add `--platform linux/amd64` to `docker pull` and
+`docker run`; it then runs under emulation.
+
 There is no `latest` tag on purpose: it could not say which eBarimt environment
 the image talks to. `sha-<commit>-<variant>` is the only tag that never moves, so
 deploy and roll back by it. `<version>` is read from the
