@@ -7,73 +7,130 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  # Pull requests only prove the image builds; nothing is pushed or tagged.
-  build-pr:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
+  # One source tree, two images: ITC ships a separate PosService build per eBarimt
+  # environment, selected by the PROD build arg. Every tag carries the variant, and
+  # there is deliberately no bare `latest` — it could not say which environment the
+  # image talks to.
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: staging
+            prod: "false"
+          - variant: prod
+            prod: "true"
     steps:
-    - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
-    - name: Build image
-      run: docker build . --tag ebarimtv3:pr-${{ github.event.pull_request.number }}
+      # The version comes from the vendor zip filename, so dropping in a new
+      # PosService_<version>-Prod.zip is the whole release step.
+      - name: Read version from PosService package
+        id: version
+        run: |
+          zip="$(ls PosService_*-Prod.zip 2>/dev/null | head -n 1)"
+          if [ -z "$zip" ]; then
+            echo "No PosService_<version>-Prod.zip in the repo root." >&2
+            exit 1
+          fi
+          version="${zip#PosService_}"
+          version="${version%-Prod.zip}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  release:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-      packages: write
+      # sha-<commit>-<variant> is the only immutable tag: <version>-<variant> is
+      # reused until the vendor zip changes, and <variant> moves on every push.
+      - name: Compute image tags
+        id: tags
+        run: |
+          image="${REGISTRY}/${IMAGE_NAME,,}"
+          {
+            echo 'tags<<TAGEOF'
+            echo "${image}:sha-${GITHUB_SHA}-${{ matrix.variant }}"
+            echo "${image}:${{ steps.version.outputs.version }}-${{ matrix.variant }}"
+            echo "${image}:${{ matrix.variant }}"
+            echo 'TAGEOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pull requests (including ones from forks) only prove the image builds.
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          build-args: |
+            PROD=${{ matrix.prod }}
+          tags: ${{ steps.tags.outputs.tags }}
+          # Scoped per variant: the two legs build different zips and would
+          # evict each other's cache otherwise.
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+
+  # One message for the whole matrix, sent on failure too.
+  notify:
+    needs: build
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions: {}
     steps:
-    - uses: actions/checkout@v7
-      with:
-        fetch-depth: '0'
+      - name: Send Telegram message
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_TO: ${{ secrets.TELEGRAM_TO }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          # Optional: a fork or an unconfigured repo skips instead of failing.
+          if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_TO" ]; then
+            echo "TELEGRAM_TOKEN / TELEGRAM_TO not set — skipping notification."
+            exit 0
+          fi
 
-    - name: Get tag info
-      id: taggerDryRun
-      uses: anothrNick/github-tag-action@1.75.0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        WITH_V: false
-        DRY_RUN: true
+          if [ "$BUILD_RESULT" = "success" ]; then
+            STATUS="✅ Build succeeded"
+          else
+            STATUS="❌ Build failed"
+          fi
 
-    - name: echo tag info
-      run: |
-        echo "The current tag is: ${{ steps.taggerDryRun.outputs.tag }}"
-        echo "The next tag version will be: ${{ steps.taggerDryRun.outputs.new_tag }}"
-        echo "The version increment was: ${{ steps.taggerDryRun.outputs.part }}"
+          # head_commit is null on workflow_dispatch.
+          SUBJECT="$(echo "$COMMIT_SUBJECT" | head -n 1)"
+          [ -n "$SUBJECT" ] || SUBJECT="(manual run)"
 
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v4
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA}"
 
-    - name: Build and push image
-      run: |
-        docker build . --tag ghcr.io/orshih6/ebarimtv3:${{ steps.taggerDryRun.outputs.new_tag }}
-        docker push ghcr.io/orshih6/ebarimtv3:${{ steps.taggerDryRun.outputs.new_tag }}
+          TEXT="$STATUS — ${GITHUB_REPOSITORY}
+          commit: ${SUBJECT} (${GITHUB_SHA:0:7})
+          by: ${GITHUB_ACTOR}
+          image: ${IMAGE}-staging
+          image: ${IMAGE}-prod
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-    - name: Bump version and push tag
-      uses: anothrNick/github-tag-action@1.75.0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        WITH_V: false
-
-    - name: send telegram message on push
-      uses: appleboy/telegram-action@v1.1.1
-      with:
-        to: ${{ secrets.TELEGRAM_TO }}
-        token: ${{ secrets.TELEGRAM_TOKEN }}
-        message: |
-          ${{ github.actor }} created commit:
-          Commit message: ${{ github.event.head_commit.message }}
-
-          Repository: ${{ github.repository }}
-
-          See changes: https://github.com/${{ github.repository }}/commit/${{github.sha}}
-
-          Tag Version: ghcr.io/orshih6/ebarimtv3:${{ steps.taggerDryRun.outputs.new_tag }}
+          # Plain text via --data-urlencode: no parse_mode, so a stray `<`, `_`
+          # or `*` in a commit subject cannot make Telegram reject the message.
+          curl --silent --show-error --fail \
+            --max-time 30 \
+            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_TO}" \
+            --data-urlencode "text=${TEXT}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --output /dev/null

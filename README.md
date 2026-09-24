@@ -37,15 +37,52 @@ PosAPI then listens on `http://localhost:7080`.
 - Config: `/etc/posapi/posapi.ini`. To override it, mount your own file:
   `-v $(pwd)/posapi.ini:/etc/posapi/posapi.ini:ro`
 - Logs: `/var/log/ebarimt/posapi.log`
-- Data: PosAPI keeps its SQLite database (`vatps.db`) in its working directory
-  `/opt/posapi`, which is also where the binary lives. That database is lost if you
-  delete the container. Plan how you persist it before you use the image in production.
+- Data: `/opt/posapi` — see below. It is lost when the container is removed.
+
+## What the image actually runs
+
+`PosService` is **not** the API server. It is a small launcher/updater. On start
+it reads `posapi.ini`, asks `updaterUrl` for the current version, downloads and
+unzips the real **PosAPI** binary into `workDir` (`/opt/posapi`), then starts and
+supervises it. PosAPI is what listens on 7080, and it keeps its state in
+`/opt/posapi/vatps.db` (SQLite): the merchant registration and the queue of
+receipts not yet delivered to eBarimt.
+
+What follows from that:
+
+- **The PosAPI version is ITC's choice, not this image's.** `3.0.12` is the
+  launcher version; the server it downloads is whatever ITC currently serves.
+- **The container needs outbound HTTPS** to `*.ebarimt.mn` and `*.auth.itc.gov.mn`
+  to start on an empty `/opt/posapi`.
+- **`/opt/posapi` is state, not code.** To keep the registration, persist that
+  directory. Mounting a volume over it hides the launcher the image ships there,
+  so copy `PosService` onto the volume first (e.g. from an init container).
+- **Run one container per registration**, never two against the same database.
+- **A running container is not proof of a healthy service** — the launcher keeps
+  running even if PosAPI does not.
+- **PosAPI has no authentication.** Anything that can reach port 7080 can issue
+  receipts under your registration. Never publish it to the internet.
 
 ## Prebuilt images
 
-Every push to `main` builds the **staging** image, pushes it to
-`ghcr.io/orshih6/ebarimtv3:<version>`, and adds a git tag for that version.
-Pull requests only check that the image builds.
+Every push to `main` builds **both** variants and pushes them to
+`ghcr.io/orshih6/ebarimtv3`:
+
+| Variant | Build arg | Tags |
+|---|---|---|
+| staging | `PROD=false` | `sha-<commit>-staging`, `<version>-staging`, `staging` |
+| prod | `PROD=true` | `sha-<commit>-prod`, `<version>-prod`, `prod` |
+
+```bash
+docker pull ghcr.io/orshih6/ebarimtv3:3.0.12-prod
+```
+
+There is no `latest` tag on purpose: it could not say which eBarimt environment
+the image talks to. `sha-<commit>-<variant>` is the only tag that never moves, so
+deploy and roll back by it. `<version>` is read from the
+`PosService_<version>-Prod.zip` file name.
+
+Pull requests only check that both images build; nothing is pushed.
 
 ## License
 
@@ -53,5 +90,7 @@ The `Dockerfile`, CI workflow and docs are [MIT](LICENSE). The PosAPI packages a
 
 ## Upgrading PosAPI
 
-Download the new packages from ITC, replace the two zips, and update the file names in
-the `Dockerfile`.
+1. Download the new packages from ITC and put them in the repo root, keeping the
+   `PosService_<version>-Prod.zip` / `ST_PosService_<version>-Staging.zip` names.
+2. Update the two file names in the `Dockerfile`.
+3. Delete the previous version's zips.
