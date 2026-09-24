@@ -29,10 +29,12 @@ docker build --build-arg PROD=true -t ebarimtv3:prod .
 ## Run
 
 ```bash
-docker run -d --name posapi -p 7080:7080 ebarimtv3:st
+docker run -d --name posapi -p 127.0.0.1:7080:7080 ebarimtv3:st
 ```
 
-PosAPI then listens on `http://localhost:7080`.
+PosAPI then listens on `http://localhost:7080`. The `127.0.0.1:` prefix matters:
+a plain `-p 7080:7080` publishes the port on every interface of the host, and
+PosAPI has no authentication (see below).
 
 - Config: `/etc/posapi/posapi.ini`. To override it, mount your own file:
   `-v $(pwd)/posapi.ini:/etc/posapi/posapi.ini:ro`
@@ -61,7 +63,8 @@ What follows from that:
 - **A running container is not proof of a healthy service** — the launcher keeps
   running even if PosAPI does not.
 - **PosAPI has no authentication.** Anything that can reach port 7080 can issue
-  receipts under your registration. Never publish it to the internet.
+  receipts under your registration. Never publish it to the internet; keep it on
+  localhost or a private network that only your POS can reach.
 
 ## Prebuilt images
 
