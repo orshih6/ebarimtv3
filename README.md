@@ -1,5 +1,7 @@
 # ebarimtv3
 
+**English** · [Монгол](README.mn.md)
+
 A Docker image for **PosAPI 3.0.12**, the ITC service (the ebarimt 3.0 VAT system) that
 a point-of-sale system uses to issue ebarimt receipts. Instead of installing the `.deb`
 on a host and running it under systemd, you run it as a container.
@@ -94,6 +96,126 @@ What follows from that:
   receipts under your registration. Never publish it to the internet; keep it on
   localhost or a private network that only your POS can reach.
 
+## Using the API
+
+Everything below goes to `http://localhost:7080`. The authoritative reference is
+ITC's [POS API 3.0.1 guide (PDF, Mongolian)](https://share.itc.gov.mn/share/developer/POS%20API%203.0.1.pdf);
+this is a short tour of it, checked against the PosAPI 3.2.50 that the launcher
+currently downloads.
+
+### 1. Activate PosAPI and add a merchant
+
+A fresh PosAPI answers every call with `503 "PosAPI is not configured."` until it
+is activated. This is a one-time manual step, and it is stored in `/opt/posapi`,
+which is why that directory must be a volume.
+
+1. Open `http://localhost:7080/web` and sign in as a citizen who holds operator
+   rights, then pick the operator to activate this PosAPI under.
+2. In the operator dashboard, [operator.ebarimt.mn](https://operator.ebarimt.mn),
+   find this PosAPI by its POS number and add the merchant by TIN. That sends a
+   request to the merchant.
+3. The merchant approves it in their own eBarimt system (Хүсэлт → Pos api хүсэлт).
+   From then on receipts can be issued for that merchant.
+
+### 2. Check the status
+
+```bash
+curl http://localhost:7080/rest/info
+```
+
+Returns the operator, `posNo`, `lastSentDate`, `leftLotteries` and the registered
+`merchants`. It is the quickest way to see whether activation worked.
+
+### 3. Issue a receipt
+
+`POST /rest/receipt` with the sale. All amounts **include** every tax: an item
+with a base price of 1000 and city tax comes to `1000 + 100 VAT + 10 city tax = 1110`.
+A B2C receipt for one VAT-able item paid in cash:
+
+```bash
+curl -X POST http://localhost:7080/rest/receipt \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "totalAmount": 11000,
+    "totalVAT": 1000,
+    "totalCityTax": 0,
+    "districtCode": "0000",
+    "merchantTin": "00000000000",
+    "posNo": "001",
+    "type": "B2C_RECEIPT",
+    "receipts": [{
+      "totalAmount": 11000,
+      "totalVAT": 1000,
+      "totalCityTax": 0,
+      "taxType": "VAT_ABLE",
+      "merchantTin": "00000000000",
+      "items": [{
+        "name": "Example item",
+        "barCodeType": "UNDEFINED",
+        "classificationCode": "0000000",
+        "measureUnit": "ш",
+        "qty": 1,
+        "unitPrice": 11000,
+        "totalVAT": 1000,
+        "totalCityTax": 0,
+        "totalAmount": 11000
+      }]
+    }],
+    "payments": [{
+      "code": "CASH",
+      "status": "PAID",
+      "paidAmount": 11000
+    }]
+  }'
+```
+
+Replace the zeros with real values: `districtCode` (4 digits), `merchantTin`
+(11 or 14 digits), and `classificationCode` (7 digits, from the national
+product classification). A successful response has `"status": "SUCCESS"` plus
+`id` (the 33-digit receipt number), `lottery`, `qrData` and `date`. ITC forbids
+storing `lottery` and `qrData` for anything other than printing them on the receipt.
+
+The main values:
+
+| Field | Values |
+|---|---|
+| `type` | `B2C_RECEIPT`, `B2B_RECEIPT`, `B2C_INVOICE`, `B2B_INVOICE` (invoices need `bankAccountNo`) |
+| `taxType` | `VAT_ABLE`, `VAT_FREE`, `VAT_ZERO`, `NO_VAT` (one sub-receipt per tax type) |
+| `payments[].code` | `CASH`, `PAYMENT_CARD` |
+| `payments[].status` | `PAID`, `PAY`, `REVERSED`, `ERROR` |
+| `barCodeType` | `UNDEFINED`, `GS1`, `ISBN` |
+| response `status` | `SUCCESS`, `ERROR`, `PAYMENT` (payment details missing) |
+
+For a B2B receipt add `customerTin`. For a B2C receipt, `consumerNo` set to the
+buyer's ebarimt number (`11…`) sends it straight to their account (`"easy": true`
+in the response). To correct or partly refund a receipt, issue a new one with
+`inactiveId` set to the receipt it replaces.
+
+### 4. Cancel a receipt
+
+```bash
+curl -X DELETE http://localhost:7080/rest/receipt \
+  -H 'Content-Type: application/json' \
+  -d '{"id": "<33-digit receipt id>", "date": "2026-01-31 12:00:00"}'
+```
+
+`date` is the receipt's own `date` from the issue response.
+
+### 5. Other calls
+
+| Call | Purpose |
+|---|---|
+| `GET /rest/sendData` | Send pending receipts to eBarimt now instead of waiting |
+| `GET /rest/bankAccounts?tin=<TIN>` | Bank accounts registered for a TIN (for invoices) |
+
+The PDF calls the first one `/rest/send`. The current PosAPI answers that path
+with `404`; `/rest/sendData` is the one that exists.
+
+**What was verified here:** the routes above exist and answer as described on an
+unactivated staging PosAPI. The receipt request follows ITC's field reference;
+issuing a real receipt needs an activated PosAPI and a merchant, which this repo
+cannot test for you. Try it against the staging image first.
+
 ## Prebuilt images
 
 Every push to `main` builds **both** variants and pushes them to
@@ -117,6 +239,10 @@ the image talks to. `sha-<commit>-<variant>` is the only tag that never moves, s
 deploy and roll back by it. `<version>` is read from the
 `PosService_<version>-Prod.zip` file name.
 
+A [release](https://github.com/orshih6/ebarimtv3/releases) is created automatically
+whenever a new ITC version lands. To be told about updates, watch the repo with
+**Watch → Custom → Releases**.
+
 Pull requests only check that both images build; nothing is pushed.
 
 ## License
@@ -129,3 +255,6 @@ The `Dockerfile`, CI workflow and docs are [MIT](LICENSE). The PosAPI packages a
    `PosService_<version>-Prod.zip` / `ST_PosService_<version>-Staging.zip` names.
 2. Update the two file names in the `Dockerfile`.
 3. Delete the previous version's zips.
+
+On push to `main`, CI publishes the new images and creates the release for that
+version.

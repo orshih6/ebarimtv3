@@ -22,6 +22,8 @@ jobs:
   # image talks to.
   build:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -102,3 +104,50 @@ jobs:
           # evict each other's cache otherwise.
           cache-from: type=gha,scope=${{ matrix.variant }}
           cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+
+  # One GitHub Release per ITC version, created the first time that version is
+  # built on main, so people can Watch -> Releases for updates. Later pushes of
+  # the same version leave the existing release alone.
+  release:
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create release for this version if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; nothing to do."
+            exit 0
+          fi
+
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          notes="$(cat <<NOTES
+          ITC PosService (PosAPI launcher) **${VERSION}**.
+
+          | Environment | Image |
+          |---|---|
+          | staging | \`${image}:${VERSION}-staging\` |
+          | prod | \`${image}:${VERSION}-prod\` |
+
+          Pinned to this exact build: \`${image}:sha-${GITHUB_SHA}-staging\` / \`-prod\`.
+
+          \`\`\`bash
+          docker pull --platform linux/amd64 ${image}:${VERSION}-prod
+          \`\`\`
+
+          The launcher downloads the current PosAPI server from ITC when it starts, so
+          the server version is ITC's, not this release's. See the README for how to
+          run and activate it.
+          NOTES
+          )"
+
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "PosAPI $VERSION" \
+            --notes "$(echo "$notes" | sed 's/^          //')"
