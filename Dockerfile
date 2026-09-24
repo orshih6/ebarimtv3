@@ -1,5 +1,5 @@
 # Use the official Ubuntu 20.04 as the base image
-FROM ubuntu:20.04
+FROM --platform=linux/amd64 ubuntu:20.04
 
 # Set environment variables to make apt non-interactive
 ENV DEBIAN_FRONTEND=noninteractive
@@ -27,9 +27,9 @@ COPY . .
 
 # Download and install PosAPI
 RUN if [ "$PROD" = "true" ]; then \
-        FILE="PosService_3.0.9.zip"; \
+        FILE="PosService_3.0.12-Prod.zip"; \
     else \
-        FILE="ST_PosService_3.0.9.zip"; \
+        FILE="ST_PosService_3.0.12-Staging.zip"; \
     fi && \
     unzip $FILE && \
     ar --output ./Package/linux/ -vx ./Package/linux/PosAPI.deb && \
