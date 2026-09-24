@@ -6,81 +6,71 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
-    inputs:
-      logLevel:
-        description: 'Log level'
-        required: true
-        default: 'warning'
-        type: choice
-        options:
-        - info
-        - warning
-        - debug
-      tags:
-        description: 'Test scenario tags'
-        required: false
-        type: boolean
-      environment:
-        description: 'Environment to run tests against'
-        type: environment
-        required: true
 
 jobs:
-  build:
+  # Pull requests only prove the image builds; nothing is pushed or tagged.
+  build-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Build image
+      run: docker build . --tag ebarimtv3:pr-${{ github.event.pull_request.number }}
+
+  release:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      packages: write
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
       with:
         fetch-depth: '0'
 
     - name: Get tag info
       id: taggerDryRun
-      uses: anothrNick/github-tag-action@1.64.0 # Don't use @master or @v1 unless you're happy to test the latest version
+      uses: anothrNick/github-tag-action@1.75.0
       env:
-        GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }} # if you don't want to set write permissions use a PAT token
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         WITH_V: false
         DRY_RUN: true
 
-    - name: echo new tag
-      run: |
-        echo "The next tag version will be: ${{ steps.taggerDryRun.outputs.new_tag }}"
-    - name: echo tag
+    - name: echo tag info
       run: |
         echo "The current tag is: ${{ steps.taggerDryRun.outputs.tag }}"
-    - name: echo part
-      run: |
+        echo "The next tag version will be: ${{ steps.taggerDryRun.outputs.new_tag }}"
         echo "The version increment was: ${{ steps.taggerDryRun.outputs.part }}"
 
     - name: Login to GitHub Container Registry
-      uses: docker/login-action@v2
+      uses: docker/login-action@v4
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.MY_GITHUB_TOKEN }}
-    - name: test
-      run: |
-        echo "VARS_JSON: ${{ toJSON(vars) }}"
-    - name: 'Build Image'
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push image
       run: |
         docker build . --tag ghcr.io/orshih6/ebarimtv3:${{ steps.taggerDryRun.outputs.new_tag }}
         docker push ghcr.io/orshih6/ebarimtv3:${{ steps.taggerDryRun.outputs.new_tag }}
-    
+
     - name: Bump version and push tag
-      uses: anothrNick/github-tag-action@1.64.0 # Don't use @master or @v1 unless you're happy to test the latest version
+      uses: anothrNick/github-tag-action@1.75.0
       env:
-        GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }} # if you don't want to set write permissions use a PAT token
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         WITH_V: false
 
     - name: send telegram message on push
-      uses: appleboy/telegram-action@master
+      uses: appleboy/telegram-action@v1.1.1
       with:
         to: ${{ secrets.TELEGRAM_TO }}
         token: ${{ secrets.TELEGRAM_TOKEN }}
         message: |
           ${{ github.actor }} created commit:
-          Commit message: ${{ github.event.commits[0].message }}
+          Commit message: ${{ github.event.head_commit.message }}
 
           Repository: ${{ github.repository }}
 
