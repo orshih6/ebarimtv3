@@ -44,7 +44,8 @@ picked up by the other.
 Or with plain `docker run`:
 
 ```bash
-docker run -d --name posapi -p 127.0.0.1:7080:7080 \
+docker run -d --name posapi --restart unless-stopped \
+  -p 127.0.0.1:7080:7080 \
   -v posapi-staging:/opt/posapi \
   ghcr.io/orshih6/ebarimtv3:3.0.12-staging
 ```
@@ -59,9 +60,13 @@ PosAPI has no authentication (see below).
 - Config: `/etc/posapi/posapi.ini`. To override it, mount your own file:
   `-v $(pwd)/posapi.ini:/etc/posapi/posapi.ini:ro`
 - Logs: `/var/log/ebarimt/posapi.log`
-- Health: the image has a `HEALTHCHECK` on port 7080. `docker ps` shows
-  `unhealthy` when PosAPI has stopped even though the container is still running.
-  Docker does not restart an unhealthy container by itself.
+- Restarts: the launcher does not restart PosAPI when it dies, so the entrypoint
+  watches it and exits the container once PosAPI has been gone for 60 s. Run with
+  a restart policy (`restart: unless-stopped` in the compose file,
+  `--restart unless-stopped` with `docker run`) and it comes back by itself.
+  Tunable with `POSAPI_DOWN_GRACE` (default `60`) and `POSAPI_START_TIMEOUT`
+  (default `300`, how long the first start may take to download PosAPI).
+- Health: the image also has a `HEALTHCHECK` on port 7080, shown in `docker ps`.
 
 ## What the image actually runs
 
@@ -83,8 +88,8 @@ What follows from that:
   it into `/opt/posapi` on every start, so any volume or host directory can be
   mounted there, including an empty one.
 - **Run one container per registration**, never two against the same database.
-- **A running container is not proof of a healthy service** — the launcher keeps
-  running, and does not restart PosAPI, if PosAPI dies. Watch the health status.
+- **The launcher does not restart PosAPI if it dies.** This image's entrypoint
+  makes the container exit instead, so use a restart policy (see Run above).
 - **PosAPI has no authentication.** Anything that can reach port 7080 can issue
   receipts under your registration. Never publish it to the internet; keep it on
   localhost or a private network that only your POS can reach.
