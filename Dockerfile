@@ -52,6 +52,13 @@ RUN mkdir -p /var/log/ebarimt && touch /var/log/ebarimt/posapi.log
 
 EXPOSE 7080
 
+# The launcher (PID 1) outlives PosAPI, so a running container proves nothing.
+# Check that something actually listens on 7080. TCP rather than HTTP because
+# PosAPI answers 503 until the POS is registered, and the image has no curl.
+# The start period covers the PosAPI download on first start.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7080"]
+
 WORKDIR /opt/posapi
 
 CMD ["./PosService"]

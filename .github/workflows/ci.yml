@@ -81,6 +81,23 @@ jobs:
           build-args: |
             PROD=${{ matrix.prod }}
           tags: ${{ steps.tags.outputs.tags }}
+          # OCI metadata: GHCR shows the description on the package page and
+          # links the image back to this repo. Set as both labels (docker
+          # inspect) and index/manifest annotations (what GHCR reads). No
+          # `licenses` key on purpose: the image mixes this repo's MIT files
+          # with ITC's proprietary PosAPI, and a single SPDX id would mislead.
+          labels: |
+            org.opencontainers.image.title=ebarimtv3
+            org.opencontainers.image.description=eBarimt 3.0 PosAPI (ITC PosService), ${{ matrix.variant }} environment
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}-${{ matrix.variant }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            index,manifest:org.opencontainers.image.title=ebarimtv3
+            index,manifest:org.opencontainers.image.description=eBarimt 3.0 PosAPI (ITC PosService), ${{ matrix.variant }} environment
+            index,manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            index,manifest:org.opencontainers.image.version=${{ steps.version.outputs.version }}-${{ matrix.variant }}
+            index,manifest:org.opencontainers.image.revision=${{ github.sha }}
           # Scoped per variant: the two legs build different zips and would
           # evict each other's cache otherwise.
           cache-from: type=gha,scope=${{ matrix.variant }}
